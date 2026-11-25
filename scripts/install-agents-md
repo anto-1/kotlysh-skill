@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Point an AGENTS.md file at this skill, for agents such as Codex that read
+# AGENTS.md instead of loading skills.
+#
+#   install-agents-md [path/to/AGENTS.md]            add or refresh the pointer
+#   install-agents-md --remove [path/to/AGENTS.md]   take it out again
+#
+# The default target is the global file, $CODEX_HOME/AGENTS.md or
+# ~/.codex/AGENTS.md. Pass a project's AGENTS.md to enable it there only.
+set -euo pipefail
+
+skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+start='<!-- kotlysh-skill:start -->'
+end='<!-- kotlysh-skill:end -->'
+
+remove=false
+if [ "${1:-}" = "--remove" ]; then remove=true; shift; fi
+target="${1:-${CODEX_HOME:-$HOME/.codex}/AGENTS.md}"
+
+mkdir -p "$(dirname "$target")"
+touch "$target"
+
+# Drop any earlier block, and the blank lines left at the end of the file.
+kept="$(awk -v s="$start" -v e="$end" '$0==s{skip=1} !skip{print} $0==e{skip=0}' "$target")"
+printf '%s' "$kept" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > "$target.tmp"
+if [ -s "$target.tmp" ]; then printf '\n' >> "$target.tmp"; fi
+
+if [ "$remove" = false ]; then
+    [ -s "$target.tmp" ] && printf '\n' >> "$target.tmp"
+    cat >> "$target.tmp" <<BLOCK
+$start
+## Kotlysh
+
+When a task needs several commands or languages with shared state, parallel
+steps, deadlines or typed data passed between languages, write it as a Kotlysh
+task instead of a chain of one-off shell commands. A single one-off command
+stays a plain shell command.
+
+Before writing one, read \`$skill_dir/SKILL.md\` in full. Run a task with
+\`$skill_dir/scripts/kotlysh-run task.kt [arguments...]\`.
+$end
+BLOCK
+fi
+
+mv "$target.tmp" "$target"
+if [ "$remove" = true ]; then echo "Removed the Kotlysh pointer from $target"
+else echo "Added the Kotlysh pointer to $target"; fi
