@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Run one Kotlysh task file without setting up a Gradle project.
+#
+#   kotlysh-run task.kt [arguments...]
+#   kotlysh-run --update        refresh the cached kotlysh-lib checkout
+#
+# The task is an ordinary Kotlin file with no package line and a top-level
+# `fun main()`. It runs in the directory the launcher was called from.
+set -euo pipefail
+
+skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+home="${KOTLYSH_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/kotlysh-skill}"
+lib="$home/kotlysh-lib"
+runner="$home/runner"
+repo="${KOTLYSH_REPO:-https://github.com/anto-1/kotlysh-lib.git}"
+
+die() { printf 'kotlysh-run: %s\n' "$*" >&2; exit 2; }
+
+# Kotlysh builds with JDK 21. Use KOTLYSH_JAVA_HOME or JAVA_HOME when it is
+# one, and otherwise look where JDKs usually live.
+java_major() { "$1/bin/java" -version 2>&1 | sed -n '1s/.*"\([0-9]*\)\..*/\1/p'; }
+find_jdk() {
+    local candidate
+    for candidate in "${KOTLYSH_JAVA_HOME:-}" "${JAVA_HOME:-}" \
+        "$HOME"/.gradle/jdks/*21* "$HOME"/.gradle/jdks/*21*/jdk-21* "$HOME"/.sdkman/candidates/java/21* \
+        /usr/lib/jvm/*21* /Library/Java/JavaVirtualMachines/*21*/Contents/Home; do
+        [ -n "$candidate" ] && [ -x "$candidate/bin/java" ] || continue
+        [ "$(java_major "$candidate")" = 21 ] && { printf '%s\n' "$candidate"; return 0; }
+    done
+    return 1
+}
+
+[ $# -ge 1 ] || die "usage: kotlysh-run task.kt [arguments...] | --update"
+command -v git >/dev/null || die "git is required"
+jdk="$(find_jdk)" || die "JDK 21 not found; set KOTLYSH_JAVA_HOME to one"
+
+mkdir -p "$home"
+if [ ! -d "$lib/.git" ]; then
+    git clone --quiet --depth 1 "$repo" "$lib" || die "cannot clone $repo"
+fi
+if [ "$1" = "--update" ]; then
+    git -C "$lib" pull --quiet --ff-only || die "cannot update $lib"
+    echo "kotlysh-lib is at $(git -C "$lib" rev-parse --short HEAD)"
+    exit 0
+fi
+
+task="$1"; shift
+[ -f "$task" ] || die "no such file: $task"
+
+mkdir -p "$runner/src/main/kotlin"
+cp "$skill_dir/runner/settings.gradle.kts" "$skill_dir/runner/build.gradle.kts" "$runner/"
+cp "$task" "$runner/src/main/kotlin/Task.kt"
+
+# Gradle only builds. The task itself runs as a plain JVM in the caller's
+# directory, so arguments, stdin and the exit code are its own.
+JAVA_HOME="$jdk" "$lib/gradlew" --project-dir "$runner" --quiet --console=plain writeClasspath \
+    || die "the task did not compile"
+exec "$jdk/bin/java" -cp "$(cat "$runner/build/classpath.txt")" TaskKt "$@"
